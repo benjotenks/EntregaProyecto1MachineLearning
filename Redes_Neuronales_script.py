@@ -280,6 +280,11 @@ def validacion_cruzada(X, y, crear_modelo_fn, vocabulario_size, maxlen, num_clas
     all_y_true = []
     all_y_pred = []
     
+    # Añadir listas para almacenar más métricas
+    fold_precision = []
+    fold_recall = []
+    fold_f1 = []
+    
     # Para visualización
     plt.figure(figsize=(15, 10))
     
@@ -320,6 +325,17 @@ def validacion_cruzada(X, y, crear_modelo_fn, vocabulario_size, maxlen, num_clas
         all_y_true.extend(y_test_fold)
         all_y_pred.extend(y_pred_classes)
         
+        # Calcular y almacenar métricas
+        from sklearn.metrics import precision_score, recall_score, f1_score
+        
+        precision = precision_score(y_test_fold, y_pred_classes, average='weighted')
+        recall = recall_score(y_test_fold, y_pred_classes, average='weighted')
+        f1 = f1_score(y_test_fold, y_pred_classes, average='weighted')
+        
+        fold_precision.append(precision)
+        fold_recall.append(recall)
+        fold_f1.append(f1)
+        
         # Graficar curvas de aprendizaje para este fold
         plt.subplot(n_splits, 2, 2*fold+1)
         plt.plot(history.history['accuracy'])
@@ -348,7 +364,19 @@ def validacion_cruzada(X, y, crear_modelo_fn, vocabulario_size, maxlen, num_clas
     std_accuracy = np.std(fold_accuracies)
     mean_loss = np.mean(fold_losses)
     
+    mean_precision = np.mean(fold_precision)
+    std_precision = np.std(fold_precision)
+    
+    mean_recall = np.mean(fold_recall)
+    std_recall = np.std(fold_recall)
+    
+    mean_f1 = np.mean(fold_f1)
+    std_f1 = np.std(fold_f1)
+    
     print(f"      Resultado final: {mean_accuracy*100:.2f}% ± {std_accuracy*100:.2f}%")
+    print(f"      Precisión promedio: {mean_precision*100:.2f}% ± {std_precision*100:.2f}%")
+    print(f"      Recall promedio: {mean_recall*100:.2f}% ± {std_recall*100:.2f}%")
+    print(f"      F1-score promedio: {mean_f1*100:.2f}% ± {std_f1*100:.2f}%")
     
     # Visualizar distribución de accuracy por fold
     plt.figure(figsize=(10, 6))
@@ -362,7 +390,12 @@ def validacion_cruzada(X, y, crear_modelo_fn, vocabulario_size, maxlen, num_clas
     plt.tight_layout()
     plt.savefig(f"cv_accuracy_distribution_{model_name}.png")
     
-    return mean_accuracy, std_accuracy, all_y_true, all_y_pred
+    return {
+        'accuracy': (np.mean(fold_accuracies), np.std(fold_accuracies)),
+        'precision': (np.mean(fold_precision), np.std(fold_precision)),
+        'recall': (np.mean(fold_recall), np.std(fold_recall)),
+        'f1': (np.mean(fold_f1), np.std(fold_f1))
+    }
 
 def main():
     # Crear directorios necesarios para el funcionamiento del programa
@@ -420,21 +453,36 @@ def main():
     resultados_cv = {}
     for nombre, crear_fn in modelo_creators.items():
         print(f"\n      • Evaluando modelo: {nombre}")
-        mean_acc, std_acc, y_true, y_pred = validacion_cruzada(
+        metrics = validacion_cruzada(
             X_seq, y_encoded, crear_fn, vocabulario_size, maxlen, num_classes, nombre, n_splits=5
         )
-        resultados_cv[nombre] = (mean_acc, std_acc)
+        resultados_cv[nombre] = metrics
     
     # Comparar modelos con validación cruzada
     print("\n      RESULTADOS DE LA VALIDACIÓN CRUZADA:")
-    print("      " + "-"*40)
-    for nombre, (acc, std) in resultados_cv.items():
-        print(f"      {nombre}: {acc*100:.2f}% ± {std*100:.2f}%")
+    print("\n" + "="*80)
+    headers = ["Modelo", "Accuracy", "Precision", "Recall", "F1-Score"]
+    print(f"{headers[0]:<12} {headers[1]:>15} {headers[2]:>15} {headers[3]:>15} {headers[4]:>15}")
+    print("-"*80)
     
-    # Determinar el mejor modelo basado en validación cruzada
-    mejor_modelo_cv = max(resultados_cv, key=lambda k: resultados_cv[k][0])
-    mejor_acc_cv, mejor_std_cv = resultados_cv[mejor_modelo_cv]
-    print(f"\n      ► MEJOR MODELO: {mejor_modelo_cv} con precisión de {mejor_acc_cv*100:.2f}% ± {mejor_std_cv*100:.2f}%")
+    for nombre, metricas in resultados_cv.items():
+        acc_mean, acc_std = metricas['accuracy']
+        prec_mean, prec_std = metricas['precision']
+        rec_mean, rec_std = metricas['recall']
+        f1_mean, f1_std = metricas['f1']
+        
+        print(f"{nombre:<12} "
+              f"{acc_mean*100:>6.2f}±{acc_std*100:>4.2f}% "
+              f"{prec_mean*100:>6.2f}±{prec_std*100:>4.2f}% "
+              f"{rec_mean*100:>6.2f}±{rec_std*100:>4.2f}% "
+              f"{f1_mean*100:>6.2f}±{f1_std*100:>4.2f}%")
+    
+    print("="*80)
+    
+    # Determinar el mejor modelo basado en F1-Score
+    mejor_modelo_cv = max(resultados_cv, key=lambda k: resultados_cv[k]['f1'][0])
+    mejor_f1_mean, mejor_f1_std = resultados_cv[mejor_modelo_cv]['f1']
+    print(f"\n      ► MEJOR MODELO: {mejor_modelo_cv} con F1-Score de {mejor_f1_mean*100:.2f}% ± {mejor_f1_std*100:.2f}%")
     
     # Entrenar el mejor modelo en todo el conjunto de entrenamiento
     print(f"\n[5/5] Entrenando el modelo final ({mejor_modelo_cv}) en el conjunto completo...")
@@ -466,8 +514,8 @@ def main():
     # Generar gráfico comparativo de modelos
     plt.figure(figsize=(10, 6))
     nombres = list(resultados_cv.keys())
-    medias = [resultados_cv[nombre][0]*100 for nombre in nombres]
-    stds = [resultados_cv[nombre][1]*100 for nombre in nombres]
+    medias = [resultados_cv[nombre]['accuracy'][0]*100 for nombre in nombres]
+    stds = [resultados_cv[nombre]['accuracy'][1]*100 for nombre in nombres]
     
     plt.bar(nombres, medias, yerr=stds, capsize=10, color=['blue', 'green', 'orange'])
     plt.axhline(y=np.mean(medias), color='r', linestyle='--', label=f'Media global: {np.mean(medias):.2f}%')
